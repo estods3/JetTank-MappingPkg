@@ -5,57 +5,68 @@ import numpy as np
 import cv2
 
 from sensor_msgs.msg import CompressedImage
-
-
 from visual_odometry import PinholeCamera, VisualOdometry
 
 class SLAMrunner:
     def __init__(self):
-        #fx: 848.993	 fy: 840.167 	cx: 374.031 	cy: 222.626
+        #Camera Params = fx: 848.993, fy: 840.167, cx: 374.031,	cy: 222.626
         self.camModel = PinholeCamera(640, 480, 848.993, 840.167, 374.031, 222.626)
         self.vo = VisualOdometry(self.camModel)
         self.traj = np.zeros((600,600,3), dtype=np.uint8)
         self.image_sub = rospy.Subscriber("/camera/image_raw", CompressedImage, self.callback, queue_size=1)
-        self.img_id = 0
+        self.img_count = 0
+        self.pose_x_mm = 0 # horizontal (lateral) width dimension
+        self.pose_y_mm = 50 # vertical height dimension (height of camera)
+        self.pose_z_mm = 0 # image depth (longitudinal) dimension
+        self.robot_speed_mm_s = 50 # robot longitudinal speed (mm/s)
+
+        self.x_avg = [0, 0, 0, 0, 0, 0, 0, 0, 0]
+        self.z_avg = [0, 0, 0]
 
     def callback(self, data):
-        ## Get Image
+        ## Get Image from 'data'
         try:
-            #img = self.bridge.imgmsg_to_cv2(data, "mono8")
             np_arr = np.fromstring(data.data, np.uint8)
             img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
+            self.img_count = self.img_count + 1
         except CvBridgeError as e:
             print(e)
 
-        ## Upscale Image Size
+        ## Upscale Image to Original Size
         scale_percent = 100 * 20 * 2 # percent of original size
         width = int(img.shape[1] * scale_percent / 100)
         height = int(img.shape[0] * scale_percent / 100)
         dim = (width, height)
-        print(width)
-        # resize image
         img = cv2.resize(img, dim, interpolation = cv2.INTER_AREA)
 
-	self.vo.update(img, self.img_id)
-
-	cur_t = self.vo.cur_t
-
-	if(img_id > 2):
-		x, y, z = cur_t[0], cur_t[1], cur_t[2]
+        ## Get Visual Odometry Coordinates
+        imgAnnotated = self.vo.update(img, self.img_count)
+        pose_current_xyz = self.vo.cur_t
+        if(self.img_count > 2):
+            x, y, z = pose_current_xyz[0], pose_current_xyz[1], pose_current_xyz[2]
 	else:
-		x, y, z = 0., 0., 0.
-	draw_x, draw_y = int(x)+290, int(z)+90
-	true_x, true_y = int(self.vo.trueX)+290, int(self.vo.trueZ)+90
+            x, y, z = 0., 0., 0.
 
-	cv2.circle(self.traj, (draw_x,draw_y), 1, (self.img_id*255/4540,255-self.img_id*255/4540,0), 1)
-	cv2.circle(self.traj, (true_x,true_y), 1, (0,0,255), 2)
-	cv2.rectangle(self.traj, (10, 20), (600, 60), (0,0,0), -1)
-	text = "Coordinates: x=%2fm y=%2fm z=%2fm"%(x,y,z)
-	cv2.putText(self.traj, text, (20,40), cv2.FONT_HERSHEY_PLAIN, 1, (255,255,255), 1, 8)
+        ## Update SLAM Robot Pose
+        self.x_avg.insert(0, x)
+        self.x_avg.pop()
+        self.z_avg.insert(0, z)
+        self.z_avg.pop()
+        self.pose_x_mm = self.pose_x_mm + -1*(self.robot_speed_mm_s * 1.0/30 * sum(self.x_avg)/len(self.x_avg)) # x-component motion
+        self.pose_z_mm = self.pose_z_mm + -1*(self.robot_speed_mm_s * 1.0/30 * sum(self.z_avg)/len(self.z_avg)) # z-component motion
 
-	cv2.imshow('Road facing camera', img)
-	cv2.imshow('Trajectory', self.traj)
-	cv2.waitKey(1)
+        ## Draw Results on Map
+        origin = [490, 490]
+        draw_x, draw_z = int(self.pose_x_mm) + origin[0], int(self.pose_z_mm) + origin[1]
+        cv2.circle(self.traj, (draw_x,draw_z), 1, (0,0,255), 1)
+        cv2.rectangle(self.traj, (10, 20), (600, 60), (0,0,0), -1)
+        text = "Coordinates: x=%2fmm y=%2fmm z=%2fmm" % (self.pose_x_mm, self.pose_y_mm, self.pose_z_mm)
+        cv2.putText(self.traj, text, (20, 40), cv2.FONT_HERSHEY_PLAIN, 1, (255,255,255), 1, 8)
+
+        ## Show Image and Map
+        cv2.imshow('Road facing camera', imgAnnotated)
+        cv2.imshow('Trajectory', self.traj)
+        cv2.waitKey(1)
 
     def saveMap(self):
         cv2.imwrite('map.png', self.traj)
@@ -71,5 +82,3 @@ def main(args):
 
 if __name__ == '__main__':
     main(sys.argv)
-
-
