@@ -5,6 +5,7 @@ import numpy as np
 import cv2
 
 from sensor_msgs.msg import CompressedImage
+from std_msgs.msg import Int16
 from visual_odometry import PinholeCamera, VisualOdometry
 
 class SLAMrunner:
@@ -13,7 +14,8 @@ class SLAMrunner:
         self.camModel = PinholeCamera(640, 480, 848.993, 840.167, 374.031, 222.626)
         self.vo = VisualOdometry(self.camModel)
         self.traj = np.zeros((600,600,3), dtype=np.uint8)
-        self.image_sub = rospy.Subscriber("/camera/image_raw", CompressedImage, self.callback, queue_size=1)
+        self.image_sub = rospy.Subscriber("/camera/image_raw", CompressedImage, self.imageCallback, queue_size=1)
+        self.state_sub = rospy.Subscriber("jt_linefollowing_motorcontrol_command", Int16, self.updateOrientation, queue_size=1)
         self.img_count = 0
         self.pose_x_mm = 0 # horizontal (lateral) width dimension
         self.pose_y_mm = 50 # vertical height dimension (height of camera)
@@ -23,7 +25,23 @@ class SLAMrunner:
         self.x_avg = [0, 0, 0, 0, 0, 0, 0, 0, 0]
         self.z_avg = [0, 0, 0]
 
-    def callback(self, data):
+        self.orientationState = np.array([[1, 0],[0, 1]])
+
+    def updateOrientation(self, data):
+        ## Get pose from 'data'
+        command = data.data
+        if(command == 6):
+            yaw = 2 # 2 degrees CCW
+        elif(command == 7):
+            yaw = -2 # 2 degrees CW
+        else:
+            yaw = 0 # yaw is straight ahead
+
+        ## Update orientationState with respect to original position
+        y = np.deg2rad(yaw)
+        self.orientationState = np.array([[np.cos(y), -1*np.sin(y)], [np.sin(y), np.cos(y)]]) * self.orientationState
+
+    def imageCallback(self, data):
         ## Get Image from 'data'
         try:
             np_arr = np.fromstring(data.data, np.uint8)
@@ -48,9 +66,11 @@ class SLAMrunner:
             x, y, z = 0., 0., 0.
 
         ## Update SLAM Robot Pose
-        self.x_avg.insert(0, x)
+        a = np.matmul(self.orientationState, np.vstack([x,z]))
+        print(a)
+        self.x_avg.insert(0, a[0])
         self.x_avg.pop()
-        self.z_avg.insert(0, z)
+        self.z_avg.insert(0, a[1])
         self.z_avg.pop()
         self.pose_x_mm = self.pose_x_mm + -1*(self.robot_speed_mm_s * 1.0/30 * sum(self.x_avg)/len(self.x_avg)) # x-component motion
         self.pose_z_mm = self.pose_z_mm + -1*(self.robot_speed_mm_s * 1.0/30 * sum(self.z_avg)/len(self.z_avg)) # z-component motion
