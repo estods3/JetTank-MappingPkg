@@ -1,4 +1,4 @@
 rospy
 numpy
-cv2
+cv2==3.2.0
 
