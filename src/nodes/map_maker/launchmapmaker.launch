@@ -1,3 +1,3 @@
 <launch>
-    <node pkg="mapmaker" name="mapmaker" type="map_maker_node.py" output="screen"></node>
+    <node pkg="map_maker" name="mapmaker" type="map_maker_node.py" output="screen"></node>
 </launch>
